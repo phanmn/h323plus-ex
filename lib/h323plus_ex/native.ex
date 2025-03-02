@@ -22,13 +22,19 @@ defmodule H323PlusEx.Native do
   # Endpoint management functions
   def create_endpoint(_name), do: error()
 
-  # Callback registration
-  def register_callback(_endpoint), do: error()
+  # Gatekeeper functions
+  def set_gatekeeper_password(_endpoint, _password), do: error()
+  def use_gatekeeper(_endpoint, _address, _identifier, _interface), do: error()
+  def is_registered_with_gatekeeper(_endpoint), do: error()
+  def get_gatekeeper_identifier(_endpoint), do: error()
 
   # Call handling functions
+  def register_callback(_endpoint), do: error()
   def listen_for_calls(_endpoint, _port), do: error()
+  def make_call(_endpoint, _destination), do: error()
   def accept_call(_endpoint, _token), do: error()
   def reject_call(_endpoint, _token), do: error()
+  def clear_call(_endpoint, _token), do: error()
 
   defp error, do: :erlang.nif_error(:nif_not_loaded)
 end

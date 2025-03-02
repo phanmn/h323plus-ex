@@ -37,11 +37,18 @@ public:
     
     // Function pointer type for call callbacks
     typedef void (*CallCallback)(const char* token, const char* caller_id, void* user_data);
+    typedef void (*GatekeeperCallback)(const char* gkid, bool success, void* user_data);
     
     // Set callback for new calls
     void SetCallCallback(CallCallback callback, void* user_data) {
-        m_callback = callback;
-        m_userData = user_data;
+        m_callCallback = callback;
+        m_callUserData = user_data;
+    }
+    
+    // Set callback for gatekeeper events
+    void SetGatekeeperCallback(GatekeeperCallback callback, void* user_data) {
+        m_gkCallback = callback;
+        m_gkUserData = user_data;
     }
     
     // Override OnAnswerCall
@@ -53,17 +60,52 @@ public:
     {
         PString token = connection.GetCallToken();
         
-        if (m_callback) {
-            m_callback(token, caller, m_userData);
+        if (m_callCallback) {
+            m_callCallback(token, caller, m_callUserData);
         }
         
         // We'll return pending so the Elixir code can decide
         return H323Connection::AnswerCallPending;
     }
+    
+    // Gatekeeper status callbacks
+    virtual void OnGatekeeperConfirm() {
+        H323EndPoint::OnGatekeeperConfirm();
+        
+        if (m_gkCallback && gatekeeper != NULL) {
+            m_gkCallback(gatekeeper->GetIdentifier(), true, m_gkUserData);
+        }
+    }
+    
+    virtual void OnGatekeeperReject() {
+        H323EndPoint::OnGatekeeperReject();
+        
+        if (m_gkCallback) {
+            m_gkCallback("", false, m_gkUserData);
+        }
+    }
+    
+    virtual void OnRegistrationConfirm(const H323TransportAddress & rasAddress) {
+        H323EndPoint::OnRegistrationConfirm(rasAddress);
+        
+        if (m_gkCallback && gatekeeper != NULL) {
+            m_gkCallback(gatekeeper->GetIdentifier(), true, m_gkUserData);
+        }
+    }
+    
+    virtual void OnRegistrationReject() {
+        H323EndPoint::OnRegistrationReject();
+        
+        if (m_gkCallback) {
+            m_gkCallback("", false, m_gkUserData);
+        }
+    }
 
 private:
-    CallCallback m_callback = NULL;
-    void* m_userData = NULL;
+    CallCallback m_callCallback = NULL;
+    void* m_callUserData = NULL;
+    GatekeeperCallback m_gkCallback = NULL;
+    void* m_gkUserData = NULL;
 };
 
 // Initialize H323Plus 
@@ -155,6 +197,38 @@ extern "C" {
         }
     }
     
+    // Set the gatekeeper password
+    void h323plus_set_gatekeeper_password(void* endpoint_ptr, const char* password) {
+        if (!endpoint_ptr || !password) return;
+        
+        H323EndPoint* endpoint = static_cast<H323EndPoint*>(endpoint_ptr);
+        endpoint->SetGatekeeperPassword(password);
+    }
+    
+    // Register with a gatekeeper
+    int h323plus_use_gatekeeper(void* endpoint_ptr, const char* address, const char* identifier, const char* interface) {
+        if (!endpoint_ptr) return 0;
+        
+        H323EndPoint* endpoint = static_cast<H323EndPoint*>(endpoint_ptr);
+        
+        PString addr(address ? address : "");
+        PString id(identifier ? identifier : "");
+        PString iface(interface ? interface : "");
+        
+        return endpoint->UseGatekeeper(addr, id, iface) ? 1 : 0;
+    }
+    
+    // Set callback for gatekeeper events
+    void h323plus_set_gatekeeper_callback(void* endpoint_ptr, 
+                                         void (*callback)(const char*, bool, void*),
+                                         void* user_data) 
+    {
+        if (!endpoint_ptr) return;
+        
+        CallbackH323EndPoint* endpoint = static_cast<CallbackH323EndPoint*>(endpoint_ptr);
+        endpoint->SetGatekeeperCallback(callback, user_data);
+    }
+    
     // Start listening for incoming calls
     int h323plus_listen(void* endpoint_ptr, int port) {
         if (!endpoint_ptr) return 0;
@@ -180,6 +254,24 @@ extern "C" {
         
         CallbackH323EndPoint* endpoint = static_cast<CallbackH323EndPoint*>(endpoint_ptr);
         endpoint->SetCallCallback(callback, user_data);
+    }
+    
+    // Make a call to a remote party
+    int h323plus_make_call(void* endpoint_ptr, const char* remote_party, char* token_buffer, int buffer_len) {
+        if (!endpoint_ptr || !remote_party || !token_buffer || buffer_len <= 0) return 0;
+        
+        H323EndPoint* endpoint = static_cast<H323EndPoint*>(endpoint_ptr);
+        
+        PString remoteParty(remote_party);
+        PString token;
+        
+        if (endpoint->MakeCall(remoteParty, token)) {
+            strncpy(token_buffer, token, buffer_len-1);
+            token_buffer[buffer_len-1] = '\0';  // Ensure null termination
+            return 1;
+        }
+        
+        return 0;
     }
     
     // Accept an incoming call
@@ -218,5 +310,41 @@ extern "C" {
         connection->AnsweringCall(H323Connection::AnswerCallDenied);
         connection->Unlock();
         return 1;
+    }
+    
+    // Clear a call
+    int h323plus_clear_call(void* endpoint_ptr, const char* token) {
+        if (!endpoint_ptr || !token) return 0;
+        
+        H323EndPoint* endpoint = static_cast<H323EndPoint*>(endpoint_ptr);
+        
+        PString tokenStr(token);
+        return endpoint->ClearCall(tokenStr) ? 1 : 0;
+    }
+    
+    // Check if a gatekeeper is registered
+    int h323plus_is_registered_with_gatekeeper(void* endpoint_ptr) {
+        if (!endpoint_ptr) return 0;
+        
+        H323EndPoint* endpoint = static_cast<H323EndPoint*>(endpoint_ptr);
+        return endpoint->IsRegisteredWithGatekeeper() ? 1 : 0;
+    }
+    
+    // Get gatekeeper identifier
+    const char* h323plus_get_gatekeeper_identifier(void* endpoint_ptr) {
+        if (!endpoint_ptr) return "";
+        
+        H323EndPoint* endpoint = static_cast<H323EndPoint*>(endpoint_ptr);
+        H323Gatekeeper* gk = endpoint->GetGatekeeper();
+        
+        if (gk != NULL) {
+            static char idBuffer[100];
+            const PString& id = gk->GetIdentifier();
+            strncpy(idBuffer, id, sizeof(idBuffer)-1);
+            idBuffer[sizeof(idBuffer)-1] = '\0';  // Ensure null termination
+            return idBuffer;
+        }
+        
+        return "";
     }
 }
