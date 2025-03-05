@@ -6,11 +6,13 @@ defmodule H323PlusEx.Native do
   @on_load :load_nifs
 
   def load_nifs do
-    path = :filename.join(:code.priv_dir(:h323plus_ex), 'h323plus_ex_nif')
+    path = :filename.join(:code.priv_dir(:h323plus_ex), "h323plus_ex_nif")
+    IO.puts "🔍 Loading NIF from: #{path}"  # Debugging output
+
     case :erlang.load_nif(path, 0) do
       :ok -> :ok
-      {:error, {:load_failed, reason}} ->
-        IO.puts "Failed to load NIF: #{reason}"
+      {:error, reason} ->
+        IO.puts "❌ Failed to load NIF: #{inspect(reason)}"
         :ok
     end
   end
