@@ -354,6 +354,12 @@ defmodule H323PlusEx do
     Native.clear_call(endpoint, to_charlist(call_token))
   end
 
+
+  @spec create_unix_socket(endpoint(), String.t()) :: {:ok, reference()} | {:error, String.t()}
+  def create_unix_socket(endpoint, socket_path) when is_binary(socket_path) do
+    Native.create_unix_socket(endpoint, to_charlist(socket_path))
+  end
+
   #
   # GenServer Implementation
   #

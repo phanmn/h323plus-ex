@@ -4,9 +4,11 @@ PRIV_DIR = $(MIX_APP_PATH)/priv
 NIF_LIB = $(PRIV_DIR)/h323plus_ex_nif.so
 WRAPPER_OBJ = $(PRIV_DIR)/h323plus_wrapper.o
 
+
 # Source files
 NIF_SRC = c_src/h323plus_ex_nif.cpp
 WRAPPER_SRC = c_src/h323plus_wrapper.cpp
+UNIX_SRC = c_src/unix_socket.cpp
 
 # Directory paths
 H323PLUS_DIR = ../h323plus
@@ -33,7 +35,7 @@ ERLANG_INCLUDE = $(ERLANG_PATH)/usr/include
 
 
 # Includes for NIF compilation (no H323Plus includes)
-NIF_INCLUDES = -I$(ERLANG_INCLUDE)					
+NIF_INCLUDES = -I$(ERLANG_INCLUDE)
 
 ifeq ($(OS), Linux)
     # Linux
@@ -77,7 +79,7 @@ else    # macOS
     NIF_LINK_CMD := $(CXX) $(CXXFLAGS) $(NIF_INCLUDES) -o $@ $^ $(H323_LIB) $(PTLIB_LIB) $(SYS_LIBS) -shared -undefined dynamic_lookup
 endif
 
-$(NIF_LIB): $(NIF_SRC) $(WRAPPER_OBJ)
+$(NIF_LIB): $(NIF_SRC) $(WRAPPER_OBJ) $(UNIX_SRC)
 	@echo "Building NIF module..."
 	$(CXX) $(CXXFLAGS) $(NIF_INCLUDES) -o $@ $^ $(H323_LIB) $(PTLIB_LIB) $(SYS_LIBS) -shared
 
@@ -87,7 +89,7 @@ clean:
 
 # For debugging
 print-paths:
-ifeq ($(OS), Linux)    
+ifeq ($(OS), Linux)
 	@echo "H323PLUS_DIR: $(H323PLUS_DIR)"
 	@echo "PTLIB_DIR: $(PTLIB_DIR)"
 	@echo "SYS_LIBS: $(SYS_LIBS)"
