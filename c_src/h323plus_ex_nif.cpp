@@ -7,8 +7,6 @@
 #include <map>
 #include <mutex>
 
-#include "unix_socket.h"
-
 // Declare the wrapper functions without including H323Plus headers
 extern "C" {
     const char* h323plus_get_version();
@@ -32,10 +30,6 @@ extern "C" {
     int h323plus_accept_call(void* endpoint, const char* token);
     int h323plus_reject_call(void* endpoint, const char* token);
     int h323plus_clear_call(void* endpoint, const char* token);
-
-    UnixSocket* h323plus_create_unix_socket(void* endpoint, const char* socket_path);
-    bool h323plus_send_unix_data(void* endpoint, void* socket, const char* data);
-    std::string h323plus_receive_unix_data(void* endpoint, void* socket);
 }
 
 // Type to store callback information
@@ -49,9 +43,6 @@ static std::map<void*, CallbackData*> g_callbacks;
 
 // Resource type for endpoint
 static ErlNifResourceType* endpoint_resource_type = nullptr;
-
-// Resource type for Unix socket
-static ErlNifResourceType* socket_resource_type = nullptr;
 
 // Resource wrapper for endpoint
 typedef struct {
@@ -445,113 +436,110 @@ static ERL_NIF_TERM make_call(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[
                           enif_make_binary(env, &bin));
 }
 
-// NIF function to destroy an resource
-void destroy_resource(ErlNifEnv* env, void* obj) {
-    delete static_cast<UnixSocket*>(obj);
-}
 
-// NIF function to create a UnixSocket object within an endpoint
-static ERL_NIF_TERM create_unix_socket(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
-    if (argc != 2) {
-        return enif_make_badarg(env);
-    }
+// // NIF function to create a UnixSocket object within an endpoint
+// static ERL_NIF_TERM nif_create_unix_socket(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv) {
+//     if (argc != 2) {
+//         return enif_make_badarg(env);
+//     }
 
-    EndpointResource* res;
-    if (!enif_get_resource(env, argv[0], endpoint_resource_type, (void**)&res)) {
-        return make_error(env, "Invalid endpoint resource");
-    }
+//     EndpointResource* endpoint_res;
+//     if (!enif_get_resource(env, argv[0], endpoint_resource_type, (void**)&endpoint_res)) {
+//         return make_error(env, "Invalid endpoint resource");
+//     }
 
-    char socket_path[1024];
-    if (!enif_get_string(env, argv[1], socket_path, sizeof(socket_path), ERL_NIF_LATIN1)) {
-        return make_error(env, "Invalid socket path");
-    }
+//     char socket_path[1024];
+//     if (!enif_get_string(env, argv[1], socket_path, sizeof(socket_path), ERL_NIF_LATIN1)) {
+//         return make_error(env, "Invalid socket path");
+//     }
 
-    // Get the endpoint from the resource
-    if (!res->endpoint) {
-        return make_error(env, "Endpoint is null");
-    }
+//     // Get the endpoint from the resource
+//     CallbackH323EndPoint* endpoint = static_cast<CallbackH323EndPoint*>(endpoint_res->endpoint);
+//     if (!endpoint) {
+//         return make_error(env, "Endpoint is null");
+//     }
 
-    UnixSocket* socket = h323plus_create_unix_socket(res-> endpoint, socket_path);
-    if (!socket) {
-        return make_error(env, "Failed to create Unix socket");
-    }
+//     // Create the UnixSocket object
+//     UnixSocket* socket = endpoint->create_unix_socket(socket_path);
+//     if (!socket) {
+//         return make_error(env, "Failed to create Unix socket");
+//     }
 
-    // Allocate a UnixSocket resource
-    socket = (UnixSocket*)enif_alloc_resource(socket_resource_type, sizeof(UnixSocket));
-    if (!socket) {
-        return make_error(env, "Failed to allocate UnixSocket resource");
-    }
+//     // Create a resource for the socket
+//     ERL_NIF_TERM socket_term;
+//     ErlNifResourceType* socket_resource_type = enif_open_resource_type(env, nullptr, "unix_socket", &UnixSocket::destroy_resource, ERL_NIF_RT_CREATE, nullptr);
+//     if (!socket_resource_type) {
+//         return make_error(env, "Failed to open resource type for Unix socket");
+//     }
+//     socket_term = enif_make_resource(env, socket);
+//     enif_release_resource(socket);
 
-    // Create a resource for the socket
-    ERL_NIF_TERM socket_term = enif_make_resource(env, socket);
-    enif_release_resource(socket); // Release since Erlang now owns it
+//     return enif_make_tuple2(env, make_atom(env, "ok"), socket_term);
+// }
 
-    return enif_make_tuple2(env, make_atom(env, "ok"), socket_term);
-}
+// // NIF function to send data over the Unix socket
+// static ERL_NIF_TERM nif_send_unix_data(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv) {
+//     if (argc != 3) {
+//         return enif_make_badarg(env);
+//     }
 
-// NIF function to send data over the Unix socket
-static ERL_NIF_TERM send_unix_data(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
-    if (argc != 3) {
-        return enif_make_badarg(env);
-    }
+//     EndpointResource* endpoint_res;
+//     if (!enif_get_resource(env, argv[0], endpoint_resource_type, (void**)&endpoint_res)) {
+//         return make_error(env, "Invalid endpoint resource");
+//     }
+//     CallbackH323EndPoint* endpoint = static_cast<CallbackH323EndPoint*>(endpoint_res->endpoint);
+//     if (!endpoint) {
+//         return make_error(env, "Endpoint is null");
+//     }
 
-    EndpointResource* res;
-    if (!enif_get_resource(env, argv[0], endpoint_resource_type, (void**)&res)) {
-        return make_error(env, "Invalid endpoint resource");
-    }
+//     UnixSocket* socket;
+//     if (!enif_get_resource(env, argv[1], enif_open_resource_type(env, nullptr, "unix_socket", nullptr, ERL_NIF_RT_TAKEOVER, nullptr), (void**)&socket)) {
+//         return make_error(env, "Invalid socket resource");
+//     }
 
-    if (!res->endpoint) {
-        return make_error(env, "Endpoint is null");
-    }
+//     char data[1024];
+//     if (!enif_get_string(env, argv[2], data, sizeof(data), ERL_NIF_LATIN1)) {
+//         return make_error(env, "Invalid data");
+//     }
 
-    UnixSocket* socket;
-    if (!enif_get_resource(env, argv[1], socket_resource_type, (void**)&socket)) {
-        return make_error(env, "Invalid socket resource");
-    }
+//     if (endpoint->send_unix_data(socket, data)) {
+//         return make_atom(env, "ok");
+//     } else {
+//         return make_error(env, "Failed to send data");
+//     }
+// }
 
-    char data[1024];
-    if (!enif_get_string(env, argv[2], data, sizeof(data), ERL_NIF_LATIN1)) {
-        return make_error(env, "Invalid data");
-    }
+// // NIF function to receive data from the Unix socket
+// static ERL_NIF_TERM nif_receive_unix_data(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv) {
+//     if (argc != 2) {
+//         return enif_make_badarg(env);
+//     }
 
-    if (!h323plus_send_unix_data(res->endpoint, socket, data)) {
-        return make_atom(env, "ok");
-    } else {
-        return make_error(env, "Failed to send data");
-    }
-}
+//     EndpointResource* endpoint_res;
+//     if (!enif_get_resource(env, argv[0], endpoint_resource_type, (void**)&endpoint_res)) {
+//         return make_error(env, "Invalid endpoint resource");
+//     }
+//     CallbackH323EndPoint* endpoint = static_cast<CallbackH323EndPoint*>(endpoint_res->endpoint);
+//     if (!endpoint) {
+//         return make_error(env, "Endpoint is null");
+//     }
 
-// NIF function to receive data from the Unix socket
-static ERL_NIF_TERM receive_unix_data(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
-    if (argc != 2) {
-        return enif_make_badarg(env);
-    }
+//     UnixSocket* socket;
+//     if (!enif_get_resource(env, argv[1], enif_open_resource_type(env, nullptr, "unix_socket", nullptr, ERL_NIF_RT_TAKEOVER, nullptr), (void**)&socket)) {
+//         return make_error(env, "Invalid socket resource");
+//     }
 
-    EndpointResource* res;
-    if (!enif_get_resource(env, argv[0], endpoint_resource_type, (void**)&res)) {
-        return make_error(env, "Invalid endpoint resource");
-    }
+//     std::string received_data = endpoint->receive_unix_data(socket);
 
-    if (!res->endpoint) {
-        return make_error(env, "Endpoint is null");
-    }
+//     // Allocate a new binary and copy the received data
+//     ErlNifBinary data_binary;
+//     if (!enif_alloc_binary(received_data.length(), &data_binary)) {
+//         return make_error(env, "Failed to allocate binary");
+//     }
+//     memcpy(data_binary.data, received_data.c_str(), received_data.length());
 
-    UnixSocket* socket;
-    if (!enif_get_resource(env, argv[1], socket_resource_type,(void**)&socket)) {
-        return make_error(env, "Invalid socket resource");
-    }
-
-    std::string received_data = h323plus_receive_unix_data(res->endpoint, socket);
-
-    // Allocate a new binary and copy the received data
-    ErlNifBinary data_binary;
-    if (!enif_alloc_binary(received_data.length(), &data_binary)) {
-        return make_error(env, "Failed to allocate binary");
-    }
-    memcpy(data_binary.data, received_data.c_str(), received_data.length());
-
-    return enif_make_binary(env, &data_binary);
-}
+//     return enif_make_binary(env, &data_binary);
+// }
 
 // NIF function to accept a call
 static ERL_NIF_TERM accept_call(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
@@ -665,11 +653,11 @@ static ErlNifFunc nif_funcs[] = {
     {"make_call", 2, make_call},
     {"accept_call", 2, accept_call},
     {"reject_call", 2, reject_call},
-    {"clear_call", 2, clear_call},
-    // Unix socket functions
-    {"create_unix_socket", 2, create_unix_socket},
-    {"send_unix_data", 3, send_unix_data},
-    {"receive_unix_data", 2, receive_unix_data}
+    {"clear_call", 2, clear_call}
+    // // Unix socket functions
+    // {"create_unix_socket", 2, nif_create_unix_socket},
+    // {"send_unix_data", 3, nif_send_unix_data},
+    // {"receive_unix_data", 2, nif_receive_unix_data}
 };
 
 // NIF initialization
@@ -678,8 +666,6 @@ static int load(ErlNifEnv* env, void** priv_data, ERL_NIF_TERM load_info) {
     endpoint_resource_type =
         enif_open_resource_type(env, NULL, "h323plus_ex_endpoint_resource",
                                endpoint_destructor, ERL_NIF_RT_CREATE, NULL);
-
-    socket_resource_type = enif_open_resource_type(env, nullptr, "unix_socket", nullptr, ERL_NIF_RT_CREATE, nullptr);
 
     if (!endpoint_resource_type) {
         return -1;

@@ -125,6 +125,179 @@ defmodule H323PlusEx do
   end
 
   @doc """
+  Create 2 sockets for endpoint, 1 for audio and 1 for video.
+
+  ## Parameters
+
+  * `endpoint` - The reference of the endpoint
+
+  ## Returns
+
+  * `{:ok, socket(), socket()}` - 2 sockets for audio and video
+  * `{:error, reason}` - if there was an error
+
+  ## Examples
+
+      iex> H323PlusEx.create_socket(endpoint)
+      {:ok, {:"$socket", #Reference<0.424244461.3195404295.169911>},
+       {:"$socket", #Reference<0.424244461.3195404295.169921>}}
+  """
+  @spec create_socket(endpoint()) :: {:ok, :socket.socket(), :socket.socket()} | {:error, String.t()}
+  def create_socket(endpoint_ref) do
+    # Define paths for audio and video sockets
+    audio_socket_path = "/tmp/h323_socket/audio"
+    video_socket_path = "/tmp/h323_socket/video"
+
+    ## Create the audio and video sockets using the SocketManager
+    case {SocketManager.create_unix_socket(audio_socket_path), SocketManager.create_unix_socket(video_socket_path)} do
+      {{:ok, audio_sock}, {:ok, video_sock}} ->
+        Agent.update(__MODULE__, fn state ->
+          Map.put(state, endpoint_ref, %{audio: audio_socket_path, video: video_socket_path})
+        end)
+        {:ok, audio_sock, video_sock}
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
+  Send data to audio and video socket in turn each 3 seconds.
+
+  ## Parameters
+
+  * `endpoint` - The reference of the endpoint
+  * `type` - Choose audio or video to send first
+  * `data` - The data semd to the sockets
+
+  ## Examples
+
+      iex> H323PlusEx.loop_send_data(endpoint1, :audio, "Test data\n")
+      Opened socket and connected to /tmp/h323_socket/audio
+      [audio] Client connected! Waiting for messages...
+      [audio] Listening for incoming data...
+      [audio] Received data: "Test data\n"
+      ✅ Sent audio data: "Test data\n"
+      [audio] Listening for incoming data...
+      Opened socket and connected to /tmp/h323_socket/video
+      [video] Client connected! Waiting for messages...
+      ✅ Sent video data: "Test data\n"
+      [video] Listening for incoming data...
+      [video] Received data: "Test data\n"
+      [video] Listening for incoming data...
+  """
+  @spec loop_send_data(endpoint(), atom(), String.t()) :: :ok | {:error, String.t()}
+  def loop_send_data(endpoint_ref, type, data) do
+    case type do
+      :audio ->
+        send_data(endpoint_ref, :audio, data)
+        Process.sleep(3000)
+        loop_send_data(endpoint_ref, :video, data)
+      :video ->
+        send_data(endpoint_ref, :video, data)
+        Process.sleep(3000)
+        loop_send_data(endpoint_ref, :audio, data)
+    end
+  end
+
+  ## Send data to the appropriate endpoint (audio or video)
+  defp send_data(endpoint_ref, type, data) do
+    case Agent.get(__MODULE__, fn state -> Map.get(state, endpoint_ref) end) do
+      nil ->
+        IO.puts("Endpoint not found!")
+        {:error, :endpoint_not_found}
+
+      sockets ->
+        socket_path =
+          case type do
+            :audio -> sockets.audio
+            :video -> sockets.video
+            _ -> raise "Unknown type: #{type}"
+          end
+
+        case Agent.get(__MODULE__, fn state -> Map.get(state, {:socket, type}) end) do
+          nil ->
+            case :socket.open(:local, :stream, :default) do
+              {:ok, socket} ->
+                case :socket.connect(socket, %{family: :local, path: socket_path}) do
+                  :ok ->
+                    IO.puts("Opened socket and connected to #{socket_path}")
+                    # Update the socket in the agent state, so we don't have to reconnect each time we send data
+                    Agent.update(__MODULE__, fn state -> Map.put(state, {:socket, type}, socket) end)
+                    send_through_socket(socket, type, data)
+                  {:error, reason} ->
+                    IO.puts("Failed to connect to #{socket_path}: #{reason}")
+                    {:error, reason}
+                end
+              {:error, reason} ->
+                IO.puts("Failed to open socket: #{reason}")
+                {:error, reason}
+            end
+          socket ->
+            IO.puts("Already have socket, send #{data} to #{socket_path}")
+            send_through_socket(socket, type, data)
+        end
+    end
+  end
+
+  ## Send data through the socket
+  defp send_through_socket(socket, type, data) do
+    case :socket.send(socket, data) do
+      :ok ->
+        IO.puts("✅ Sent #{type} data: #{inspect(data)}")
+        {:ok}
+      {:error, reason} ->
+        IO.puts("Failed to send data: #{inspect(reason)}")
+        {:error, reason}
+    end
+  end
+
+  @doc """
+  Start 2 processes to receive data from audio and video socket.
+
+  ## Parameters
+
+  * `audio_socket` - The socket for audio
+  * `video_socket` - The socket for video
+
+  ## Examples
+
+      iex> H323PlusEx.start_receive_from_socket(audio_socket, video_socket)
+
+  """
+  @spec start_receive_from_socket(:socket.socket(), :socket.socket()) :: :ok
+  def start_receive_from_socket(audio_socket, video_socket) do
+    spawn(fn -> accept_and_receive(audio_socket, :audio) end)
+    spawn(fn -> accept_and_receive(video_socket, :video) end)
+  end
+
+  ## Accept connection from socket and call receive data function
+  defp accept_and_receive(socket, type) do
+    case :socket.accept(socket) do
+      {:ok, client} ->
+        IO.puts("[#{type}] Client connected! Waiting for messages...")
+        receive_loop(client, type)
+      {:error, reason} ->
+        IO.puts("[#{type}] Failed to accept connection: #{reason}")
+    end
+  end
+
+  ## Receive data from the socket
+  defp receive_loop(client, type) do
+    IO.puts("[#{type}] Listening for incoming data...")
+    case :socket.recvmsg(client, 4096, 5000) do
+      {:ok, %{iov: [data]}} ->
+        IO.puts("[#{type}] Received data: #{inspect(data)}")
+        receive_loop(client, type)
+      {:closed, data} ->
+        IO.puts("[#{type}] Connection closed. Last data received: #{inspect(data)}")
+        :ok
+      {:error, reason} ->
+        IO.puts("[#{type}] Error receiving data: #{inspect(reason)}")
+        :error
+    end
+  end
+
+  @doc """
   Set the password for the gatekeeper.
 
   ## Parameters
@@ -354,12 +527,6 @@ defmodule H323PlusEx do
     Native.clear_call(endpoint, to_charlist(call_token))
   end
 
-
-  @spec create_unix_socket(endpoint(), String.t()) :: {:ok, reference()} | {:error, String.t()}
-  def create_unix_socket(endpoint, socket_path) when is_binary(socket_path) do
-    Native.create_unix_socket(endpoint, to_charlist(socket_path))
-  end
-
   #
   # GenServer Implementation
   #
@@ -420,6 +587,18 @@ defmodule H323PlusEx do
     end
 
     {:noreply, state}
+  end
+
+  @impl true
+  def handle_call({:update, func}, _from, state) when is_function(func, 1) do
+    new_state = func.(state)
+    {:reply, :ok, new_state}
+  end
+
+  @impl true
+  def handle_call({:get, fun}, _from, state) do
+    result = fun.(state)
+    {:reply, result, state}
   end
 
   @impl true

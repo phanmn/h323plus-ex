@@ -11,9 +11,6 @@
 #include <ptlib/pprocess.h>
 #include "h323.h"
 
-// Include the UnixSocket class for Unix socket communication
-#include "unix_socket.h"
-
 // Forward declarations
 class SimpleH323Process;
 
@@ -101,45 +98,6 @@ public:
 
         if (m_gkCallback) {
             m_gkCallback("", false, m_gkUserData);
-        }
-    }
-
-        // Create a UnixSocket object
-    UnixSocket* create_unix_socket(const std::string &socket_path) {
-        try {
-            return new UnixSocket(socket_path);
-        } catch (const std::runtime_error &e) {
-            PTRACE(1, "H323PlusEx\tFailed to create Unix socket: " << e.what());
-            return nullptr;
-        }
-    }
-
-    // Send data over the Unix socket
-    bool send_unix_data(UnixSocket *socket, const std::string &data) {
-        if (!socket) {
-            PTRACE(1, "H323PlusEx\tInvalid socket");
-            return false;
-        }
-        try {
-            socket->Send(data);
-            return true;
-        } catch (const std::runtime_error &e) {
-            PTRACE(1, "H323PlusEx\tFailed to send data: " << e.what());
-            return false;
-        }
-    }
-
-    // Receive data from the Unix socket
-    std::string receive_unix_data(UnixSocket *socket) {
-        if (!socket) {
-            PTRACE(1, "H323PlusEx\tInvalid socket");
-            return "";
-        }
-        try {
-            return socket->Receive();
-        } catch (const std::runtime_error &e) {
-            PTRACE(1, "H323PlusEx\tFailed to receive data: " << e.what());
-            return "";
         }
     }
 
@@ -390,31 +348,31 @@ extern "C" {
         return "";
     }
 
-    void* h323plus_create_unix_socket(void* endpoint_ptr, const char* socket_path) {
-        if (!endpoint_ptr || !socket_path) return nullptr;
+    // void* h323plus_create_unix_socket(void* endpoint_ptr, const char* socket_path) {
+    //     if (!endpoint_ptr || !socket_path) return nullptr;
 
-        CallbackH323EndPoint* endpoint = static_cast<CallbackH323EndPoint*>(endpoint_ptr);
-        return endpoint->create_unix_socket(socket_path);
-    }
+    //     CallbackH323EndPoint* endpoint = static_cast<CallbackH323EndPoint*>(endpoint_ptr);
+    //     return endpoint->create_unix_socket(socket_path);
+    // }
 
-    bool h323plus_send_unix_data(void* endpoint_ptr, void* socket_ptr, const char* data) {
-        if (!endpoint_ptr || !socket_ptr || !data) return false;
+    // bool h323plus_send_unix_data(void* endpoint_ptr, void* socket_ptr, const char* data) {
+    //     if (!endpoint_ptr || !socket_ptr || !data) return false;
 
-        CallbackH323EndPoint* endpoint = static_cast<CallbackH323EndPoint*>(endpoint_ptr);
-        UnixSocket* socket = static_cast<UnixSocket*>(socket_ptr);
+    //     CallbackH323EndPoint* endpoint = static_cast<CallbackH323EndPoint*>(endpoint_ptr);
+    //     UnixSocket* socket = static_cast<UnixSocket*>(socket_ptr);
 
-        return endpoint->send_unix_data(socket, data);
-    }
+    //     return endpoint->send_unix_data(socket, data);
+    // }
 
-    // Using std::string here to avoid memory leak
-    // When using const, data need to be allocated in the memory to be used after fuction call,
-    // however, there's no way to free the memory in there, so it will cause memory leak.
-    std::string h323plus_receive_unix_data(void* endpoint_ptr, void* socket_ptr) {
-        if (!endpoint_ptr || !socket_ptr) return "";
+    // // Using std::string here to avoid memory leak
+    // // When using const, data need to be allocated in the memory to be used after fuction call,
+    // // however, there's no way to free the memory in there, so it will cause memory leak.
+    // std::string h323plus_receive_unix_data(void* endpoint_ptr, void* socket_ptr) {
+    //     if (!endpoint_ptr || !socket_ptr) return "";
 
-        CallbackH323EndPoint* endpoint = static_cast<CallbackH323EndPoint*>(endpoint_ptr);
-        UnixSocket* socket = static_cast<UnixSocket*>(socket_ptr);
+    //     CallbackH323EndPoint* endpoint = static_cast<CallbackH323EndPoint*>(endpoint_ptr);
+    //     UnixSocket* socket = static_cast<UnixSocket*>(socket_ptr);
 
-        return endpoint->receive_unix_data(socket);
-    }
+    //     return endpoint->receive_unix_data(socket);
+    // }
 }

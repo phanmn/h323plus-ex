@@ -4,11 +4,9 @@ PRIV_DIR = $(MIX_APP_PATH)/priv
 NIF_LIB = $(PRIV_DIR)/h323plus_ex_nif.so
 WRAPPER_OBJ = $(PRIV_DIR)/h323plus_wrapper.o
 
-
 # Source files
 NIF_SRC = c_src/h323plus_ex_nif.cpp
 WRAPPER_SRC = c_src/h323plus_wrapper.cpp
-UNIX_SRC = c_src/unix_socket.cpp
 
 # Directory paths
 H323PLUS_DIR = ../h323plus
@@ -47,7 +45,7 @@ ifeq ($(OS), Linux)
     PTLIB_LIB = $(PTLIB_DIR)/lib_linux_x86_64/libpt_s.a
 
     # Additional system libraries (often needed by PTLib)
-    SYS_LIBS = $(OPENSSL_LIBS) -lpthread -lldap -llber -lexpat
+    SYS_LIBS = $(OPENSSL_LIBS) -lpthread -lldap -llber -lexpat -lresolv
     LDFLAGS = -shared
 else
     # macOS
@@ -79,7 +77,7 @@ else    # macOS
     NIF_LINK_CMD := $(CXX) $(CXXFLAGS) $(NIF_INCLUDES) -o $@ $^ $(H323_LIB) $(PTLIB_LIB) $(SYS_LIBS) -shared -undefined dynamic_lookup
 endif
 
-$(NIF_LIB): $(NIF_SRC) $(WRAPPER_OBJ) $(UNIX_SRC)
+$(NIF_LIB): $(NIF_SRC) $(WRAPPER_OBJ)
 	@echo "Building NIF module..."
 	$(CXX) $(CXXFLAGS) $(NIF_INCLUDES) -o $@ $^ $(H323_LIB) $(PTLIB_LIB) $(SYS_LIBS) -shared
 
