@@ -11,6 +11,9 @@
 #include <ptlib/pprocess.h>
 #include "h323.h"
 
+// Include the UnixSocketChannel class
+#include "unix_socket.h"
+
 // Forward declarations
 class SimpleH323Process;
 
@@ -33,7 +36,15 @@ public:
 // Custom endpoint class with callback support
 class CallbackH323EndPoint : public H323EndPoint {
 public:
-    CallbackH323EndPoint() : H323EndPoint() {}
+    CallbackH323EndPoint() : H323EndPoint() {
+        LoadBaseFeatureSet();
+
+        useJitterBuffer = false; // save a little processing time
+        AddAllCapabilities(0, P_MAX_INDEX, "*");
+        AddAllUserInputCapabilities(0, P_MAX_INDEX);
+        SetCapability(0, 0, new H323_G711Capability(H323_G711Capability::muLaw) );
+        SetCapability(0, 0, new H323_G711Capability(H323_G711Capability::ALaw) );
+    }
 
     // Function pointer type for call callbacks
     typedef void (*CallCallback)(const char* token, const char* caller_id, void* user_data);
@@ -101,11 +112,83 @@ public:
         }
     }
 
+
+    BOOL OpenAudioChannel(H323Connection &connection, BOOL isEncoding, unsigned bufferSize, H323AudioCodec &codec) {
+        std::string socketPath = "/tmp/h323_audio";
+        UnixSocketChannel *ch = new UnixSocketChannel(socketPath);
+
+        if (!ch->IsOpen()) {
+            std::cerr << "Failed to connect to UNIX socket!" << std::endl;
+            delete ch;
+            return FALSE;
+        }
+
+        if (!codec.AttachChannel(ch)) {  // Assuming AttachChannel returns a status
+            std::cerr << "Failed to attach channel to codec!" << std::endl;
+            return FALSE;
+        }
+        return TRUE;
+    }
+
+    BOOL OnStartLogicalChannel(H323Connection & connection,
+                               H323Channel & channel) {
+        std::cout << "[H323Plus] OnStartLogicalChannel called!" << std::endl;
+
+        PString dir;
+        switch (channel.GetDirection()) {
+            case H323Channel::IsTransmitter:
+                dir = "sending";
+                break;
+            case H323Channel::IsReceiver:
+                dir = "receiving";
+                break;
+            default:
+                break;
+        }
+
+        PTRACE(1, "Started logical channel " << dir << " "
+                                            << channel.GetCapability());
+        return true;
+    }
+
+    void SetUnixSocket(const std::string &socketPath) {
+        PTRACE(1, "CallbackH323EndPoint: Setting UNIX socket path: " << socketPath);
+        this->unixSocketPath = socketPath;
+    }
+
+
+
+    virtual void OnSetCapabilities() {
+        std::cout << "[H323Plus] OnSetCapabilities called!" << std::endl;
+        LoadBaseFeatureSet();
+
+        // AddAllCapabilities(0, P_MAX_INDEX, "*");
+        // AddAllUserInputCapabilities(0, P_MAX_INDEX);
+
+        // H323Capability *gsmCap = H323Capability::Create("GSM-06.10{sw}");
+        // if (gsmCap != NULL)
+        // {
+        //     SetCapability(0, 0, gsmCap);
+        //     gsmCap->SetTxFramesInPacket(4); // For GSM 06.10, 1 frame ~ 20 milliseconds
+        // }
+
+        SetCapability(0, 0, new H323_G711Capability(H323_G711Capability::muLaw) );
+        SetCapability(0, 0, new H323_G711Capability(H323_G711Capability::ALaw) );
+
+        // AddAllUserInputCapabilities(0, 1);
+
+        // PTRACE(1, "Capabilities:\n" << setprecision(2) << capabilities);
+    }
+
+
+
+
 private:
     CallCallback m_callCallback = NULL;
     void* m_callUserData = NULL;
     GatekeeperCallback m_gkCallback = NULL;
     void* m_gkUserData = NULL;
+    std::string unixSocketPath;
 };
 
 // Initialize H323Plus
@@ -178,6 +261,8 @@ extern "C" {
         PString userName(name);
         endpoint->SetLocalUserName(userName);
 
+        // cout << "Local capabilities:\n" << endpoint->GetCapabilities() << endl;
+
         // Store in our map
         std::lock_guard<std::mutex> lock(g_mutex);
         g_endpoints[endpoint] = endpoint;
@@ -240,6 +325,7 @@ extern "C" {
         if (endpoint->StartListener(listener)) {
             return 1;
         } else {
+            cout << "Could not open H.323 listener port " << port << endl;
             delete listener;
             return 0;
         }
@@ -348,31 +434,10 @@ extern "C" {
         return "";
     }
 
-    // void* h323plus_create_unix_socket(void* endpoint_ptr, const char* socket_path) {
-    //     if (!endpoint_ptr || !socket_path) return nullptr;
+    void h323plus_set_unix_socket(void* endpoint_ptr, const char* socket_path) {
+        if (!endpoint_ptr || !socket_path) return;
 
-    //     CallbackH323EndPoint* endpoint = static_cast<CallbackH323EndPoint*>(endpoint_ptr);
-    //     return endpoint->create_unix_socket(socket_path);
-    // }
-
-    // bool h323plus_send_unix_data(void* endpoint_ptr, void* socket_ptr, const char* data) {
-    //     if (!endpoint_ptr || !socket_ptr || !data) return false;
-
-    //     CallbackH323EndPoint* endpoint = static_cast<CallbackH323EndPoint*>(endpoint_ptr);
-    //     UnixSocket* socket = static_cast<UnixSocket*>(socket_ptr);
-
-    //     return endpoint->send_unix_data(socket, data);
-    // }
-
-    // // Using std::string here to avoid memory leak
-    // // When using const, data need to be allocated in the memory to be used after fuction call,
-    // // however, there's no way to free the memory in there, so it will cause memory leak.
-    // std::string h323plus_receive_unix_data(void* endpoint_ptr, void* socket_ptr) {
-    //     if (!endpoint_ptr || !socket_ptr) return "";
-
-    //     CallbackH323EndPoint* endpoint = static_cast<CallbackH323EndPoint*>(endpoint_ptr);
-    //     UnixSocket* socket = static_cast<UnixSocket*>(socket_ptr);
-
-    //     return endpoint->receive_unix_data(socket);
-    // }
+        CallbackH323EndPoint* endpoint = static_cast<CallbackH323EndPoint*>(endpoint_ptr);
+        endpoint->SetUnixSocket(socket_path);
+    }
 }

@@ -70,6 +70,11 @@ $(WRAPPER_OBJ): $(WRAPPER_SRC)
 	@mkdir -p $(PRIV_DIR)
 	$(CXX) $(CXXFLAGS) $(WRAPPER_INCLUDES) -c $< -o $@
 
+$(PRIV_DIR)/unix_socket.o: c_src/unix_socket.cpp c_src/unix_socket.h
+	@echo "Compiling Unix Socket Channel..."
+	@mkdir -p $(PRIV_DIR)
+	$(CXX) $(CXXFLAGS) $(WRAPPER_INCLUDES) -c $< -o $@
+
 # Step 2: Compile and link the NIF with the wrapper object
 ifeq ($(OS), Linux)
     NIF_LINK_CMD := $(CXX) $(CXXFLAGS) $(NIF_INCLUDES) -o $@ $^ $(H323_LIB) $(PTLIB_LIB) $(SYS_LIBS) -shared
@@ -77,9 +82,11 @@ else    # macOS
     NIF_LINK_CMD := $(CXX) $(CXXFLAGS) $(NIF_INCLUDES) -o $@ $^ $(H323_LIB) $(PTLIB_LIB) $(SYS_LIBS) -shared -undefined dynamic_lookup
 endif
 
-$(NIF_LIB): $(NIF_SRC) $(WRAPPER_OBJ)
+$(NIF_LIB): $(NIF_SRC) $(WRAPPER_OBJ) $(PRIV_DIR)/unix_socket.o
 	@echo "Building NIF module..."
-	$(CXX) $(CXXFLAGS) $(NIF_INCLUDES) -o $@ $^ $(H323_LIB) $(PTLIB_LIB) $(SYS_LIBS) -shared
+
+	$(CXX) $(CXXFLAGS) $(NIF_INCLUDES) -o $@ $(NIF_SRC) $(WRAPPER_OBJ) $(PRIV_DIR)/unix_socket.o $(H323_LIB) $(PTLIB_LIB) $(SYS_LIBS) -shared
+
 
 
 clean:

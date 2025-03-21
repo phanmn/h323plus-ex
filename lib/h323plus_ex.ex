@@ -200,7 +200,7 @@ defmodule H323PlusEx do
   end
 
   ## Send data to the appropriate endpoint (audio or video)
-  defp send_data(endpoint_ref, type, data) do
+  def send_data(endpoint_ref, type, data) do
     case Agent.get(__MODULE__, fn state -> Map.get(state, endpoint_ref) end) do
       nil ->
         IO.puts("Endpoint not found!")
@@ -531,6 +531,93 @@ defmodule H323PlusEx do
   # GenServer Implementation
   #
 
+ def create_unix_socket() do
+    IO.puts("[Elixir] start create_unix_socket")
+    unix_socket_path = "/tmp/h323_audio"
+    if File.exists?(unix_socket_path) do
+      File.rm!(unix_socket_path)
+    end
+    case :socket.open(:local, :stream, :default) do
+      {:ok, socket} ->
+        case :socket.bind(socket, %{family: :local, path: unix_socket_path}) do
+          :ok ->
+            case :socket.listen(socket, 5) do
+              :ok ->
+                IO.puts("[Elixir] UNIX socket server started at #{unix_socket_path}")
+                spawn (fn -> accept_connections(socket) end)
+                {:ok, socket}
+              {:error, reason} ->
+                IO.puts("Failed to listen on socket: #{reason}")
+                {:error, reason}
+            end
+          {:error, reason} ->
+            IO.puts("Failed to bind socket: #{reason}")
+            {:error, reason}
+        end
+      {:error, reason} ->
+        IO.puts("Failed to open socket: #{reason}")
+        {:error, reason}
+    end
+  end
+
+  defp accept_connections(socket) do
+    {:ok, client} = :socket.accept(socket)
+    IO.puts("Accepted connection from Polycommmmmmmmm")
+    # send_wav(client)
+    # Process.sleep(2000)
+    # spawn(fn -> WavToRtp.stream_wav_to_rtp(client, "/tmp/example1.wav") end)
+    handle_client(client)
+    accept_connections(socket) # Keep listening for new connections
+  end
+
+  defp handle_client(client) do
+    spawn(fn -> loop(client) end)
+  end
+
+  defp loop(client) do
+    case :socket.recv(client, 1024) do
+      {:ok, data} when byte_size(data) > 0 ->
+        # IO.puts("Received data from H323: #{inspect(data)}")
+        loop(client)
+      _ ->
+        IO.puts("Client disconnected")
+        :socket.close(client)
+    end
+  end
+
+  defp send_wav1(socket) do
+    case File.read("/tmp/example1.alaw") do
+      {:ok, data} ->
+        :socket.send(socket, data)
+        IO.puts("G.711 A-law audio sent successfully!")
+        Process.sleep(2000)
+        send_wav1(socket)
+
+      {:error, reason} ->
+        IO.puts("Failed to read audio file: #{inspect(reason)}")
+    end
+  end
+
+ defp send_wav(socket) do
+    File.open("/tmp/example1.wav", [:read, :binary], fn file ->
+      IO.binread(file, 44)  # Skip WAV header
+      stream_pcm(file, socket)
+    end)
+    Process.sleep(1000)
+    send_wav(socket)
+  end
+
+  defp stream_pcm(file, socket) do
+    case IO.binread(file, 1024) do
+      :eof -> :ok
+      chunk ->
+        :socket.send(socket, chunk)
+        Process.sleep(20)  # Adjust for real-time playback
+        stream_pcm(file, socket)
+    end
+  end
+
+
   @impl true
   def init([name, options]) do
     case create_endpoint(name) do
@@ -542,6 +629,7 @@ defmodule H323PlusEx do
 
         # Start listening for calls
         listen_port = Keyword.get(options, :listen_port, 1720)
+        create_unix_socket()
         case listen_for_calls(endpoint, listen_port) do
           :ok ->
             # Register with gatekeeper if requested
@@ -629,7 +717,11 @@ defmodule H323PlusEx do
 
   @impl true
   def handle_call({:accept_call, token}, _from, state) do
+    # unix_socket_path = "/tmp/h323_audio"
     result = accept_call(state.endpoint, token)
+
+    # accept_connections(unix_socket_path)
+    # spawn(fn -> connect_socket() end)
 
     # Update call state if successful
     new_state = if result == :ok do
@@ -681,5 +773,87 @@ defmodule H323PlusEx do
     end
 
     :ok
+  end
+
+end
+defmodule WavToRtp do
+  @rtp_payload_type 8  # G.711 A-law
+  @frame_size 160  # 20ms frame (8kHz * 0.02s)
+
+  # Read and extract PCM data from a WAV file
+  def read_pcm(filename) do
+    case File.read(filename) do
+      {:ok, binary} ->
+        << "RIFF", _::binary-size(4), "WAVE", "fmt ", _::binary-size(4),
+           1::little-16, 1::little-16, 8000::little-32, _::binary-size(6), 16::little-16,
+           "data", _::binary-size(4), pcm_data::binary >> = binary
+        {:ok, pcm_data}
+
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  # Convert PCM (16-bit) to G.711 A-law
+  def convert_to_g711a(pcm_data) do
+    pcm_data
+    |> :binary.bin_to_list()
+    |> Enum.chunk_every(2)
+    |> Enum.map(fn [lo, hi] ->
+      sample = Bitwise.bor(Bitwise.bsl(hi, 8), lo)
+      sample = if sample >= 32768, do: sample - 65536, else: sample  # Correct signed conversion
+      encode_alaw(sample)
+    end)
+    |> :binary.list_to_bin()
+  end
+
+  # Encode a single PCM sample to G.711 A-law
+  defp encode_alaw(pcm) do
+    a = :math.log10(abs(pcm) + 1) * 16
+    seg = trunc(a)
+    quant = trunc((a - seg) * 16)
+    encoded = Bitwise.bor(Bitwise.bsl(seg, 4), quant)
+
+    if pcm < 0, do: Bitwise.bxor(encoded, 0xD5), else: Bitwise.bxor(encoded, 0x55)
+  end
+
+  # Create an RTP packet
+  defp create_rtp_packet(seq, timestamp, payload, ssrc \\ 12345) do
+    version = 2
+    padding = 0
+    extension = 0
+    csrc_count = 0
+    marker = 0
+    payload_type = @rtp_payload_type
+
+    header = <<
+      version::size(2), padding::size(1), extension::size(1), csrc_count::size(4),
+      marker::size(1), payload_type::size(7), seq::big-16, timestamp::big-32, ssrc::big-32
+    >>
+
+    header <> payload
+  end
+
+  # Send RTP packets via a UNIX socket
+  def send_rtp(socket, g711a_data) do
+    Enum.chunk_every(:binary.bin_to_list(g711a_data), @frame_size)
+    |> Enum.with_index()
+    |> Enum.each(fn {payload, i} ->
+      seq_num = rem(i, 65536)  # Keep sequence number within range
+      timestamp = i * @frame_size  # Timestamp increments by frame size
+      packet = create_rtp_packet(seq_num, timestamp, :binary.list_to_bin(payload))
+      :socket.send(socket, packet)
+    end)
+  end
+
+  # Main function: Read WAV, convert, and send over RTP
+  def stream_wav_to_rtp(socket, wav_file) do
+    case read_pcm(wav_file) do
+      {:ok, pcm_data} ->
+        g711a_data = convert_to_g711a(pcm_data)
+        send_rtp(socket, g711a_data)
+        :ok
+
+      {:error, reason} -> {:error, reason}
+    end
   end
 end
